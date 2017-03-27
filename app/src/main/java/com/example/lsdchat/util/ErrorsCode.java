@@ -1,5 +1,6 @@
 package com.example.lsdchat.util;
 
+import android.app.AlertDialog;
 import android.content.Context;
 
 import com.example.lsdchat.R;
@@ -39,6 +40,14 @@ public class ErrorsCode {
         }
     }
 
+    public static void showErrorDialog(Context context, String message) {
+        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        builder
+                .setMessage(message)
+                .setPositiveButton(context.getString(R.string.alert_ok), (dialog, which) -> dialog.dismiss())
+                .setCancelable(false).create().show();
+
+    }
 
 
 }

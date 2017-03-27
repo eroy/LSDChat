@@ -7,18 +7,18 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Environment;
 import android.provider.MediaStore;
-import android.support.design.widget.TextInputEditText;
-import android.support.v7.app.AlertDialog;
 import android.text.Editable;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.util.Log;
-import android.widget.Button;
-import android.widget.ImageView;
 import android.widget.Toast;
 
+import com.example.lsdchat.App;
 import com.example.lsdchat.R;
 import com.example.lsdchat.constant.ApiConstant;
+import com.example.lsdchat.manager.SharedPreferencesManager;
+import com.example.lsdchat.model.User;
+import com.example.lsdchat.util.CreateMapRequestBody;
 import com.example.lsdchat.util.Email;
 import com.example.lsdchat.util.ErrorsCode;
 import com.example.lsdchat.util.Network;
@@ -28,9 +28,6 @@ import com.facebook.FacebookCallback;
 import com.facebook.FacebookException;
 import com.facebook.login.LoginManager;
 import com.facebook.login.LoginResult;
-import com.redmadrobot.inputmask.MaskedTextChangedListener;
-
-import org.jetbrains.annotations.NotNull;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -52,23 +49,21 @@ public class RegistrationPresenter implements RegistrationContract.Presenter {
     private static final int MIN_DIGITS_AND_LETTERS_VALUE = 2;
     private static final int MIN_PASSWORD_LENGTH = 8;
     private static final int MAX_PASSWORD_LENGTH = 12;
-    private static final long MAX_AVATAR_SIZE = 1048576;
 
     private static final String DATE_FORMAT = "yyyyMMdd_HHmmss";
     private static final String AVATAR_FILE_NAME = "_avatar.jpg";
-    private static final String PHONE_MASK = "+38 (0[00]) [000]-[00]-[00]";
 
     private RegistrationContract.View mView;
     private RegistrationContract.Model mModel;
+    private SharedPreferencesManager mPreferencesManager;
 
     private Context mContext;
     private CallbackManager mCallbackManager;
 
-    private String mUserFacebookId;
+    private String mUserFacebookId = null;
     private Uri mFullSizeAvatarUri = null;
     private File mUploadFile = null;
     private String mPhoneNumber = null;
-
     private TextWatcher mTextWatcher = new TextWatcher() {
         @Override
         public void beforeTextChanged(CharSequence charSequence, int i, int i1, int i2) {
@@ -86,32 +81,28 @@ public class RegistrationPresenter implements RegistrationContract.Presenter {
         }
     };
 
-    public RegistrationPresenter(RegistrationContract.View view) {
+    public RegistrationPresenter(RegistrationContract.View view, SharedPreferencesManager preferencesManager) {
         mView = view;
         mModel = new RegistrationModel();
         mContext = view.getContext();
         mCallbackManager = CallbackManager.Factory.create();
+        mPreferencesManager = preferencesManager;
     }
 
     @Override
-    public void onFacebookButtonClickListener(Button button) {
-        button.setOnClickListener(view -> {
-            if (isOnline()) {
-                LoginManager.getInstance().logInWithReadPermissions((Activity) mContext, Arrays.asList("public_profile"));
+    public void onFacebookButtonClickListener() {
+        if (isOnline(mContext)) {
+            LoginManager.getInstance().logInWithReadPermissions((Activity) mContext, Arrays.asList("public_profile"));
+            getFacebookToken();
 
-                getFacebookToken();
-
-                button.setText(mContext.getString(R.string.fb_button_text_linked));
-                button.setClickable(false);
-            } else {
-                mView.showNetworkErrorDialog();
-            }
-        });
+            mView.setLinkedStatus();
+            mView.setClickableFacebookButton(false);
+        } else {
+            mView.showNetworkErrorDialog();
+        }
     }
 
-    @Override
     public void getFacebookToken() {
-
         LoginManager.getInstance().registerCallback(mCallbackManager, new FacebookCallback<LoginResult>() {
             @Override
             public void onSuccess(LoginResult loginResult) {
@@ -125,38 +116,39 @@ public class RegistrationPresenter implements RegistrationContract.Presenter {
 
             @Override
             public void onError(FacebookException error) {
+                mView.setClickableFacebookButton(true);
                 Log.e("FB", error.getMessage());
             }
         });
     }
 
     @Override
-    public void onSignupButtonClickListener(Button button, TextInputEditText email, TextInputEditText pass, TextInputEditText confpass, TextInputEditText name, TextInputEditText web) {
-        button.setOnClickListener(view -> {
-            RegistrationForm form = new RegistrationForm();
-            form.setEmail(email.getText().toString());
-            form.setPassword(pass.getText().toString());
-            form.setFullName(name.getText().toString());
-            form.setWebsite(web.getText().toString());
+    public void onSignupButtonClickListener(String email, String password, String confPassword, String name, String website) {
 
-            boolean validateValue = validateRegForm(
-                    email.getText().toString(),
-                    pass.getText().toString(),
-                    confpass.getText().toString());
+        RegistrationForm form = new RegistrationForm();
+        form.setEmail(email);
+        form.setPassword(password);
+        form.setFullName(name);
+        form.setWebsite(website);
 
-            if (isOnline()) {
-                requestSessionAndRegistration(validateValue, form, button);
-            } else {
-                mView.showNetworkErrorDialog();
-            }
-        });
+        boolean validateValue = validateRegForm(email, password, confPassword, name);
+
+        if (isOnline(mContext)) {
+            requestSessionAndRegistration(validateValue, form);
+        } else {
+            mView.showNetworkErrorDialog();
+        }
     }
 
-    public void requestSessionAndRegistration(boolean validateValue, RegistrationForm form, Button button) {
+    @Override
+    public void requestSessionAndRegistration(boolean validateValue, RegistrationForm form) {
         if (validateValue) {
             mModel.getSessionNoAuth()
                     .doOnRequest(request -> mView.showProgressBar())
                     .doOnUnsubscribe(() -> mView.hideProgressBar())
+                    .doOnNext(sessionResponse -> {
+                        mPreferencesManager.saveToken(sessionResponse.getSession().getToken());
+                    })
                     .subscribe(sessionResponse -> {
 
                         String token = sessionResponse.getSession().getToken();
@@ -164,21 +156,21 @@ public class RegistrationPresenter implements RegistrationContract.Presenter {
                         Log.e("TEST", token);
 
                     }, throwable -> {
+
+                        mView.setClickableSignupButton(true);
                         decodeThrowableAndShowAlert(throwable);
-                        Log.e("TEST", throwable.getMessage());
                     });
-            button.setClickable(false);
+            mView.setClickableSignupButton(false);
         }
     }
 
     private void getRegistrationWithToken(String token, RegistrationForm form) {
         form.setPhone(mPhoneNumber);
 
-
         if (mUserFacebookId != null) {
             form.setFacebookId(mUserFacebookId);
-
         }
+
         mModel.getRegistration(token, form)
                 .doOnRequest(request -> mView.showProgressBar())
                 .doOnUnsubscribe(() -> mView.hideProgressBar())
@@ -186,7 +178,11 @@ public class RegistrationPresenter implements RegistrationContract.Presenter {
                     getLoginRegistratedUser(form.getEmail(), form.getPassword(), token);
                 })
                 .subscribe(registrationResponse -> {
-                }, this::decodeThrowableAndShowAlert);
+                }, throwable -> {
+
+                    mView.setClickableSignupButton(true);
+                    decodeThrowableAndShowAlert(throwable);
+                });
     }
 
     private void getLoginRegistratedUser(String email, String password, String token) {
@@ -194,19 +190,42 @@ public class RegistrationPresenter implements RegistrationContract.Presenter {
                 .doOnRequest(request -> mView.showProgressBar())
                 .doOnUnsubscribe(() -> mView.hideProgressBar())
                 .doOnNext(loginResponse -> {
+                    int userID = loginResponse.getLoginUser().getId();
+                    String userName = loginResponse.getLoginUser().getFullName();
+                    long blobID = loginResponse.getLoginUser().getBlobId();
+
+                    saveUserToDataBase(email, password, userName, userID, blobID, true);
+                    mView.getDialogAndUser(token);
+
                     if (mUploadFile != null) {
-                        getBlobObjectCreateFile(token, getFileMimeType(mUploadFile), mUploadFile.getName());
+                        getBlobObjectCreateFile(token, getFileMimeType(mUploadFile), mUploadFile.getName(), userID);
                     } else {
                         Toast.makeText(mContext, mContext.getString(R.string.registration_complete), Toast.LENGTH_SHORT).show();
-                        mView.navigatetoMainScreen();
+                        mView.navigateToMainScreen();
                     }
                 })
                 .subscribe(loginResponse -> {
                     //at this point user can be added to database
-                }, this::decodeThrowableAndShowAlert);
+                }, throwable -> {
+
+                    mView.setClickableSignupButton(true);
+                    decodeThrowableAndShowAlert(throwable);
+                });
     }
 
-    private void getBlobObjectCreateFile(String token, String mime, String fileName) {
+    private void saveUserToDataBase(String email, String password, String fullName, int userID, long blobID, boolean isKeepSignIn) {
+        User user = new User();
+        user.setEmail(email);
+        user.setPassword(password);
+        user.setFullName(fullName);
+        user.setId(userID);
+        user.setBlobId(blobID);
+        user.setSignIn(isKeepSignIn);
+
+        App.getDataManager().saveUserToRealm(user);
+    }
+
+    private void getBlobObjectCreateFile(String token, String mime, String fileName, int userId) {
         mModel.createFile(token, mime, fileName)
                 .doOnRequest(request -> mView.showProgressBar())
                 .doOnUnsubscribe(() -> mView.hideProgressBar())
@@ -215,107 +234,76 @@ public class RegistrationPresenter implements RegistrationContract.Presenter {
                     String params = registrationCreateFileResponse.getBlob().getBlobObjestAccess().getParams();
                     Uri uri = Uri.parse(params);
 
-                    RequestBody contentR = RequestBody.create(MultipartBody.FORM, uri.getQueryParameter(ApiConstant.UploadParametres.CONTENT_TYPE));
-                    RequestBody expiresR = RequestBody.create(MultipartBody.FORM, uri.getQueryParameter(ApiConstant.UploadParametres.EXPIRES));
-                    RequestBody aclR = RequestBody.create(MultipartBody.FORM, uri.getQueryParameter(ApiConstant.UploadParametres.ACL));
-                    RequestBody keyR = RequestBody.create(MultipartBody.FORM, uri.getQueryParameter(ApiConstant.UploadParametres.KEY));
-                    RequestBody policyR = RequestBody.create(MultipartBody.FORM, uri.getQueryParameter(ApiConstant.UploadParametres.POLICY));
-                    RequestBody successR = RequestBody.create(MultipartBody.FORM, uri.getQueryParameter(ApiConstant.UploadParametres.SUCCESS_ACTION_STATUS));
-                    RequestBody algorithmR = RequestBody.create(MultipartBody.FORM, uri.getQueryParameter(ApiConstant.UploadParametres.ALGORITHM));
-                    RequestBody credentialR = RequestBody.create(MultipartBody.FORM, uri.getQueryParameter(ApiConstant.UploadParametres.CREDENTIAL));
-                    RequestBody dateR = RequestBody.create(MultipartBody.FORM, uri.getQueryParameter(ApiConstant.UploadParametres.DATE));
-                    RequestBody signatureR = RequestBody.create(MultipartBody.FORM, uri.getQueryParameter(ApiConstant.UploadParametres.SIGNATURE));
-
                     RequestBody file = RequestBody.create(MediaType.parse(getFileMimeType(mUploadFile)), mUploadFile);
                     MultipartBody.Part multiPart = MultipartBody.Part.createFormData(ApiConstant.UploadParametres.FILE, mUploadFile.getName(), file);
 
-                    uploadFileRetrofit(token, blobId, contentR, expiresR, aclR, keyR, policyR, successR, algorithmR, credentialR, dateR, signatureR, multiPart);
-
+                    uploadFileRetrofit(token, blobId, CreateMapRequestBody.createMapRequestBody(uri), multiPart, userId);
                 }, throwable -> {
+
                     decodeThrowableAndShowAlert(throwable);
                     Log.e("TEST", throwable.getMessage());
                 });
     }
 
-    private void uploadFileRetrofit(
-            String token, long blobId,
-            RequestBody content,
-            RequestBody expires,
-            RequestBody acl,
-            RequestBody key,
-            RequestBody policy,
-            RequestBody success,
-            RequestBody algorithm,
-            RequestBody credential,
-            RequestBody date,
-            RequestBody signature,
-            MultipartBody.Part file) {
-
-        HashMap<String, RequestBody> map = new HashMap<>();
-        map.put(ApiConstant.UploadParametres.CONTENT_TYPE, content);
-        map.put(ApiConstant.UploadParametres.EXPIRES, expires);
-        map.put(ApiConstant.UploadParametres.ACL, acl);
-        map.put(ApiConstant.UploadParametres.KEY, key);
-        map.put(ApiConstant.UploadParametres.POLICY, policy);
-        map.put(ApiConstant.UploadParametres.SUCCESS_ACTION_STATUS, success);
-        map.put(ApiConstant.UploadParametres.ALGORITHM, algorithm);
-        map.put(ApiConstant.UploadParametres.CREDENTIAL, credential);
-        map.put(ApiConstant.UploadParametres.DATE, date);
-        map.put(ApiConstant.UploadParametres.SIGNATURE, signature);
-
+    private void uploadFileRetrofit(String token, long blobId, HashMap<String, RequestBody> map, MultipartBody.Part file, int userId) {
         mModel.uploadFileMap(map, file)
                 .doOnRequest(request -> mView.showProgressBar())
                 .doOnUnsubscribe(() -> mView.hideProgressBar())
                 .subscribe(aVoid -> {
                     long fileSize = mUploadFile.length();
                     if (fileSize != 0 && blobId != 0) {
-                        declareFileUploaded(fileSize, token, blobId);
+                        declareFileUploaded(fileSize, token, blobId, userId);
                     }
-                }, this::decodeThrowableAndShowAlert);
+                }, throwable -> {
+
+                    mView.setClickableSignupButton(true);
+                    decodeThrowableAndShowAlert(throwable);
+                });
     }
 
 
-    private void declareFileUploaded(long size, String token, long blobId) {
+    private void declareFileUploaded(long size, String token, long blobId, int userId) {
         mModel.declareFileUploaded(size, token, blobId)
                 .doOnRequest(request -> mView.showProgressBar())
                 .doOnUnsubscribe(() -> mView.hideProgressBar())
                 .subscribe(aVoid -> {
+                    updateUserBlobId(token, userId, blobId);
+
+                }, throwable -> {
+
+                    mView.setClickableSignupButton(true);
+                    decodeThrowableAndShowAlert(throwable);
+                });
+    }
+
+    private void updateUserBlobId(String token, int userId, long blobId) {
+        mModel.updateUserInfo(token, userId, blobId)
+                .doOnRequest(request -> mView.showProgressBar())
+                .doOnUnsubscribe(() -> mView.hideProgressBar())
+                .subscribe(loginResponse -> {
 
                     Toast.makeText(mContext, mContext.getString(R.string.registration_complete), Toast.LENGTH_SHORT).show();
-                    mView.navigatetoMainScreen();
-                }, this::decodeThrowableAndShowAlert);
+                    mView.navigateToMainScreen();
+                }, throwable -> {
 
+                    mView.setClickableSignupButton(true);
+                    decodeThrowableAndShowAlert(throwable);
+                });
+    }
+
+    @Override
+    public void setPhoneNumber(String phone) {
+        mPhoneNumber = phone;
     }
 
 
     @Override
-    public void setTextChangedInputMaskListener(TextInputEditText phone) {
-        MaskedTextChangedListener listener = new MaskedTextChangedListener(
-                PHONE_MASK,
-                true,
-                phone,
-                null,
-                new MaskedTextChangedListener.ValueListener() {
-                    @Override
-                    public void onExtracted(@NotNull String s) {
-                        if (s.length() == 9) mPhoneNumber = "+380" + s;
-                    }
-
-                    @Override
-                    public void onMandatoryCharactersFilled(boolean b) {
-                    }
-                }
-        );
-        phone.addTextChangedListener(listener);
-        phone.setOnFocusChangeListener(listener);
-    }
-
-    @Override
-    public boolean validateRegForm(String email, String pass, String confPass) {
+    public boolean validateRegForm(String email, String pass, String confPass, String fullName) {
         boolean test = true;
         if (!validateEmail(email)) test = false;
         if (!validatePassword(pass)) test = false;
         if (!validateConfPassword(pass, confPass)) test = false;
+        if (!validateFullName(fullName)) test = false;
         return test;
     }
 
@@ -343,7 +331,7 @@ public class RegistrationPresenter implements RegistrationContract.Presenter {
             if (Character.isDigit(pass.charAt(i))) digitCounter++;
             if (Character.isUpperCase(pass.charAt(i))) capitalizeLetterCounter++;
         }
-        if (digitCounter < MIN_DIGITS_AND_LETTERS_VALUE || capitalizeLetterCounter < MIN_DIGITS_AND_LETTERS_VALUE || passLength == (digitCounter + capitalizeLetterCounter)) {
+        if (digitCounter < MIN_DIGITS_AND_LETTERS_VALUE || capitalizeLetterCounter < MIN_DIGITS_AND_LETTERS_VALUE) {
             mView.setWeakPasswordError();
             return false;
         }
@@ -354,6 +342,15 @@ public class RegistrationPresenter implements RegistrationContract.Presenter {
     public boolean validateConfPassword(String pass, String confPass) {
         if (!pass.equals(confPass)) {
             mView.setEquelsPasswordError();
+            return false;
+        }
+        return true;
+    }
+
+    @Override
+    public boolean validateFullName(String name) {
+        if (name.isEmpty()) {
+            mView.setFullNameError();
             return false;
         }
         return true;
@@ -396,12 +393,10 @@ public class RegistrationPresenter implements RegistrationContract.Presenter {
             case REQUEST_IMAGE_CAMERA:
                 if (resultCode == RESULT_OK) {
                     mView.getUserpicUri(mFullSizeAvatarUri);
-                    if (checkUserAvatarImageSize(mFullSizeAvatarUri)) {
-                        try {
-                            mUploadFile = StorageHelper.decodeAndSaveUri(mContext, mFullSizeAvatarUri);
-                        } catch (FileNotFoundException e) {
-                            e.printStackTrace();
-                        }
+                    try {
+                        mUploadFile = StorageHelper.decodeAndSaveUri(mContext, mFullSizeAvatarUri);
+                    } catch (FileNotFoundException e) {
+                        e.printStackTrace();
                     }
                     Toast.makeText(mContext, mContext.getString(R.string.photo_added), Toast.LENGTH_SHORT).show();
                 }
@@ -410,12 +405,10 @@ public class RegistrationPresenter implements RegistrationContract.Presenter {
                 if (resultCode == RESULT_OK) {
                     mFullSizeAvatarUri = data.getData();
                     mView.getUserpicUri(mFullSizeAvatarUri);
-                    if (checkUserAvatarImageSize(mFullSizeAvatarUri)) {
-                        try {
-                            mUploadFile = StorageHelper.decodeAndSaveUri(mContext, mFullSizeAvatarUri);
-                        } catch (FileNotFoundException e) {
-                            e.printStackTrace();
-                        }
+                    try {
+                        mUploadFile = StorageHelper.decodeAndSaveUri(mContext, mFullSizeAvatarUri);
+                    } catch (FileNotFoundException e) {
+                        e.printStackTrace();
                     }
                     Toast.makeText(mContext, mContext.getString(R.string.photo_added), Toast.LENGTH_SHORT).show();
                 }
@@ -433,7 +426,6 @@ public class RegistrationPresenter implements RegistrationContract.Presenter {
         String message = ErrorsCode.getErrorMessage(mContext, t);
         mView.showResponseDialogError(title, message);
         mView.hideProgressBar();
-
     }
 
     private String getFileMimeType(File file) {
@@ -444,9 +436,9 @@ public class RegistrationPresenter implements RegistrationContract.Presenter {
         return mTextWatcher;
     }
 
-    private boolean checkUserAvatarImageSize(Uri uri) {
-        File file = new File(uri.getPath());
-        return file.length() > MAX_AVATAR_SIZE ? true : false;
+    @Override
+    public boolean isOnline(Context context) {
+        return Network.isOnline(context);
     }
 
     @Override
@@ -454,10 +446,5 @@ public class RegistrationPresenter implements RegistrationContract.Presenter {
         mView = null;
         mModel = null;
         mCallbackManager = null;
-    }
-
-    @Override
-    public boolean isOnline() {
-        return Network.isOnline(mContext);
     }
 }

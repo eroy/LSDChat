@@ -13,15 +13,26 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.ProgressBar;
 
+import com.example.lsdchat.App;
 import com.example.lsdchat.R;
-import com.example.lsdchat.ui.MainActivity;
+import com.example.lsdchat.ui.main.MainActivity;
+import com.example.lsdchat.util.DialogUtil;
+import com.example.lsdchat.util.ErrorsCode;
+import com.example.lsdchat.util.Network;
+import com.example.lsdchat.util.UsersUtil;
+import com.example.lsdchat.util.error.ErrorInterface;
+import com.example.lsdchat.util.error.NetworkConnect;
 import com.facebook.FacebookSdk;
 import com.facebook.drawee.view.SimpleDraweeView;
+import com.redmadrobot.inputmask.MaskedTextChangedListener;
 
+import org.jetbrains.annotations.NotNull;
+
+import retrofit2.adapter.rxjava.HttpException;
 import uk.co.chrisjenx.calligraphy.CalligraphyContextWrapper;
 
 
-public class RegistrationActivity extends AppCompatActivity implements RegistrationContract.View {
+public class RegistrationActivity extends AppCompatActivity implements RegistrationContract.View,NetworkConnect,ErrorInterface {
 
     private TextInputLayout mEmail;
     private TextInputLayout mPass;
@@ -44,6 +55,9 @@ public class RegistrationActivity extends AppCompatActivity implements Registrat
     private Toolbar mToolbar;
     private RegistrationPresenter mRegistrationPresenter;
 
+    private static final String PHONE_MASK = "+38 (0[00]) [000]-[00]-[00]";
+    private static final String PHONE_FORMAT = "+380";
+    private static final int PHONE_LENGTH = 9;
 
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -51,28 +65,42 @@ public class RegistrationActivity extends AppCompatActivity implements Registrat
 
         setContentView(R.layout.activity_registration);
 
-        mRegistrationPresenter = new RegistrationPresenter(this);
+        mRegistrationPresenter = new RegistrationPresenter(this, App.getSharedPreferencesManager(this));
         initView();
 
-
         setRegFormHint();
-
 
         setSupportActionBar(mToolbar);
         configurateToolbar();
 
-
         mEmailEdit.addTextChangedListener(mRegistrationPresenter.getTextWatcher());
         mPassEdit.addTextChangedListener(mRegistrationPresenter.getTextWatcher());
         mConfPassEdit.addTextChangedListener(mRegistrationPresenter.getTextWatcher());
+        mNameEdit.addTextChangedListener(mRegistrationPresenter.getTextWatcher());
 
-        mRegistrationPresenter.setTextChangedInputMaskListener(mPhoneEdit);
+        MaskedTextChangedListener listener = new MaskedTextChangedListener(PHONE_MASK, true, mPhoneEdit, null,
+                new MaskedTextChangedListener.ValueListener() {
+                    @Override
+                    public void onExtracted(@NotNull String s) {
+                        if (s.length() == PHONE_LENGTH) mRegistrationPresenter.setPhoneNumber(PHONE_FORMAT + s);
+                    }
+
+                    @Override
+                    public void onMandatoryCharactersFilled(boolean b) {
+                    }
+                }
+        );
+        mPhoneEdit.addTextChangedListener(listener);
+        mPhoneEdit.setOnFocusChangeListener(listener);
+
         mImageView.setOnClickListener(view -> mRegistrationPresenter.onAvatarClickListener());
-        mRegistrationPresenter.onFacebookButtonClickListener(mFacebookButton);
-        mRegistrationPresenter.onSignupButtonClickListener(mSignUpButton,
-                mEmailEdit, mPassEdit, mConfPassEdit, mNameEdit, mWebEdit);
-
-
+        mFacebookButton.setOnClickListener(view -> mRegistrationPresenter.onFacebookButtonClickListener());
+        mSignUpButton.setOnClickListener(view -> mRegistrationPresenter.onSignupButtonClickListener(
+                mEmailEdit.getText().toString(),
+                mPassEdit.getText().toString(),
+                mConfPassEdit.getText().toString(),
+                mNameEdit.getText().toString(),
+                mWebEdit.getText().toString()));
     }
 
     private void initView() {
@@ -95,7 +123,6 @@ public class RegistrationActivity extends AppCompatActivity implements Registrat
         mPhoneEdit = (TextInputEditText) findViewById(R.id.tiet_phone_reg);
         mNameEdit = (TextInputEditText) findViewById(R.id.tiet_name_reg);
         mWebEdit = (TextInputEditText) findViewById(R.id.tiet_web_reg);
-
     }
 
     public void setRegFormHint() {
@@ -116,7 +143,7 @@ public class RegistrationActivity extends AppCompatActivity implements Registrat
     }
 
     @Override
-    public void navigatetoMainScreen() {
+    public void navigateToMainScreen() {
         Intent intent = new Intent(this, MainActivity.class);
         intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         startActivity(intent);
@@ -138,8 +165,8 @@ public class RegistrationActivity extends AppCompatActivity implements Registrat
 
     @Override
     protected void onDestroy() {
-        super.onDestroy();
         mRegistrationPresenter.onDestroy();
+        super.onDestroy();
     }
 
     @Override
@@ -168,10 +195,31 @@ public class RegistrationActivity extends AppCompatActivity implements Registrat
     }
 
     @Override
+    public void setFullNameError() {
+        mName.setError(getString(R.string.name_cannot_be_empty));
+    }
+
+    @Override
+    public void setClickableSignupButton(boolean value) {
+        mSignUpButton.setClickable(value);
+    }
+
+    @Override
+    public void setLinkedStatus() {
+        mFacebookButton.setText(getString(R.string.fb_button_text_linked));
+    }
+
+    @Override
+    public void setClickableFacebookButton(boolean value) {
+        mFacebookButton.setClickable(value);
+    }
+
+    @Override
     public void resetErrorMessages() {
         mEmail.setError(null);
         mPass.setError(null);
         mConfPass.setError(null);
+        mName.setError(null);
     }
 
     @Override
@@ -221,5 +269,34 @@ public class RegistrationActivity extends AppCompatActivity implements Registrat
     @Override
     public void hideProgressBar() {
         mProgressBar.setVisibility(View.INVISIBLE);
+    }
+
+    @Override
+    public void getDialogAndUser(String token) {
+        UsersUtil.getUserListAndSave(token, this);
+        DialogUtil.getAllDialogAndSave(token,this);
+    }
+
+    @Override
+    public void showErrorDialog(Throwable throwable) {
+        String title = "Error " + String.valueOf(((HttpException) throwable).code());
+        String message = ErrorsCode.getErrorMessage(App.getContext(), throwable);
+
+        new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMessage(message)
+                .setPositiveButton("OK", (dialogInterface, i) -> dialogInterface.dismiss())
+                .setCancelable(false)
+                .create().show();
+    }
+
+    @Override
+    public boolean isNetworkConnect() {
+        if (!Network.isOnline(this)) {
+            Network.showErrorConnectDialog(this);
+            return false;
+        } else {
+            return true;
+        }
     }
 }

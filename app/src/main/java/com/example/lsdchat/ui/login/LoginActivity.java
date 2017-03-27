@@ -18,13 +18,18 @@ import android.widget.TextView;
 import com.example.lsdchat.App;
 import com.example.lsdchat.R;
 import com.example.lsdchat.ui.forgot_password.ForgotPasswordFragment;
+import com.example.lsdchat.ui.main.MainActivity;
 import com.example.lsdchat.ui.registration.RegistrationActivity;
-import com.example.lsdchat.ui.MainActivity;
+import com.example.lsdchat.util.DialogUtil;
 import com.example.lsdchat.util.ErrorsCode;
+import com.example.lsdchat.util.Network;
+import com.example.lsdchat.util.UsersUtil;
+import com.example.lsdchat.util.error.ErrorInterface;
+import com.example.lsdchat.util.error.NetworkConnect;
 
 import retrofit2.adapter.rxjava.HttpException;
 
-public class LoginActivity extends AppCompatActivity implements LoginContract.View {
+public class LoginActivity extends AppCompatActivity implements LoginContract.View,NetworkConnect,ErrorInterface {
 
     private static final String FORGOT_PASSWORD_DIALOG = "forgot";
     private ProgressBar mProgressBar;
@@ -47,7 +52,7 @@ public class LoginActivity extends AppCompatActivity implements LoginContract.Vi
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_login);
-        mPresenter = new LoginPresenter(this, App.getDataManager());
+        mPresenter = new LoginPresenter(this, App.getDataManager(),App.getSharedPreferencesManager(this));
         initView();
 
 //        set button disable
@@ -216,5 +221,32 @@ public class LoginActivity extends AppCompatActivity implements LoginContract.Vi
         mForgotPasswordFragment.show(getFragmentManager(), FORGOT_PASSWORD_DIALOG);
     }
 
+    @Override
+    public void getDialogAndUser(String token) {
+        UsersUtil.getUserListAndSave(token, this);
+        DialogUtil.getAllDialogAndSave(token,this);
+    }
 
+    @Override
+    public void showErrorDialog(Throwable throwable) {
+        String title = "Error " + String.valueOf(((HttpException) throwable).code());
+        String message = ErrorsCode.getErrorMessage(App.getContext(), throwable);
+
+        new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMessage(message)
+                .setPositiveButton("OK", (dialogInterface, i) -> dialogInterface.dismiss())
+                .setCancelable(false)
+                .create().show();
+    }
+
+    @Override
+    public boolean isNetworkConnect() {
+        if (!Network.isOnline(this)) {
+            Network.showErrorConnectDialog(this);
+            return false;
+        } else {
+            return true;
+        }
+    }
 }
